@@ -56,7 +56,7 @@ class LanguageLayoutManager:
 
         self.controller = keyboard.Controller()
         self.typing_programmatically = False  # Flag to ignore programmatic typing
-        self.first_word_processed = False  # Flag to track if the first word has been processed
+        self.word_processed_in_sentence = False # Only check the first word
 
 
     def on_press(self, key):
@@ -70,27 +70,29 @@ class LanguageLayoutManager:
             return False  # Stop listener and exit program
 
         try:
-            if key == keyboard.Key.space:
-                # Process word only if it hasn't been processed yet in this sequence
-                if not self.first_word_processed and self.current_word:
-                    self.process_word()
-                self.first_word_processed = True # Mark as processed after first space
-                self.current_word = "" # Reset word after space
+            # Trigger process on space or punctuation
+            if key == keyboard.Key.space or (hasattr(key, 'char') and key.char in ".,?!"):
+                trigger = ' ' if key == keyboard.Key.space else key.char
+                if self.current_word and not self.word_processed_in_sentence:
+                    self.process_word(trigger)
+                    self.word_processed_in_sentence = True
+                self.current_word = "" # Reset word after trigger
+                self.current_layout = None # Reset layout detection for next word
             elif key == keyboard.Key.enter:
-                # Optionally process word before clearing if needed, or just reset
-                # if self.current_word: self.process_word()
-                self.first_word_processed = False # Reset processing flag on new line
-                self.current_layout = None # Reset layout detection on new line
+                if self.current_word and not self.word_processed_in_sentence:
+                    self.process_word('\n')
+                self.word_processed_in_sentence = False # Reset for NEW sentence
+                self.current_layout = None
                 self.current_word = ""
             elif key == keyboard.Key.backspace:
                  if self.current_word:
                      self.current_word = self.current_word[:-1]
             elif hasattr(key, 'char') and key.char is not None:
-                char = key.char # Keep original case for mapping if needed, but layout check uses lower
+                char = key.char
                 self.current_word += char
-                # Update layout based on the *first* char typed after Enter/start
-                if not self.first_word_processed and self.current_layout is None:
-                    self.update_layout(char.lower()) # Use lower for check
+                # Update layout based on the first alphabetical char typed
+                if self.current_layout is None:
+                    self.update_layout(char.lower())
 
         except Exception as e:
             print(f"Error in on_press: {e}")
@@ -106,7 +108,7 @@ class LanguageLayoutManager:
             print("Layout detected: He")
         # else: layout remains None if first char is symbol/number
 
-    def process_word(self):
+    def process_word(self, trigger_char):
         """Process the typed word and apply the rules."""
         if not self.current_layout or not self.current_word:
             print("Skipping processing: No layout detected or empty word.")
@@ -125,7 +127,7 @@ class LanguageLayoutManager:
                 # Use .get(c.lower(), c) to handle potential missing keys gracefully
                 converted_to_he = ''.join(self.en_to_he_mapping.get(c.lower(), c) for c in word_to_process)
                 print(f"Rule 3 (KB=En, Lang=He?): '{word_to_process}' -> '{converted_to_he}' - Converting to Hebrew")
-                self.replace_and_switch("He", word_to_process, converted_to_he)
+                self.replace_and_switch("He", word_to_process, converted_to_he, trigger_char)
         elif self.current_layout == "He":
             # Rule 4: Assume Hebrew keys used for English word
             # Use .get(c, c) to handle potential missing keys gracefully
@@ -133,47 +135,50 @@ class LanguageLayoutManager:
             print(f"Checking if '{word_to_process}' is actually English (converted: '{converted_to_en}')")
             if self.is_english(converted_to_en):
                 print(f"Rule 4 (KB=He, Lang=En?): '{word_to_process}' -> '{converted_to_en}' - Converting to English")
-                self.replace_and_switch("En", word_to_process, converted_to_en)
+                self.replace_and_switch("En", word_to_process, converted_to_en, trigger_char)
             else:
                 # Rule 2: Assume Hebrew keys used for Hebrew word (or unrecognized)
                 print(f"Rule 2 (KB=He, Lang=He?): '{word_to_process}' - No change (converted '{converted_to_en}' not deemed English)")
                 return
 
     # --- THIS FUNCTION IS MODIFIED ---
-    def replace_and_switch(self, target_layout, original_word, corrected_word):
-        """Replace the typed word, add a space, and switch keyboard layout."""
+    def replace_and_switch(self, target_layout, original_word, corrected_word, trigger_char):
+        """Replace the typed word and switch keyboard layout."""
         print(f"Action: Replacing '{original_word}' with '{corrected_word}', switching to {target_layout}")
 
         # Set flag to ignore the keys we are about to simulate
         self.typing_programmatically = True
 
-        # Small delay before starting actions might help ensure focus
-        time.sleep(0.05)
+        try:
+            # Small delay before starting actions might help ensure focus
+            time.sleep(0.05)
 
-        # Simulate backspaces to delete the original typed word + the triggering space
-        num_backspaces = len(original_word) + 1
-        for _ in range(num_backspaces):
-            self.controller.press(keyboard.Key.backspace)
-            self.controller.release(keyboard.Key.backspace)
-            time.sleep(0.03) # Increased backspace delay (from 0.01) for app responsiveness
+            # Simulate backspaces to delete the original typed word + triggering char
+            num_backspaces = len(original_word) + 1
+            for _ in range(num_backspaces):
+                self.controller.press(keyboard.Key.backspace)
+                self.controller.release(keyboard.Key.backspace)
+                time.sleep(0.03) 
 
-        # *** FIX: Switch layout BEFORE typing ***
-        self.switch_layout() # Just toggle the layout
+            # Switch layout
+            self.switch_layout()
 
-        # *** FIX: Wait AFTER switching for OS to process the change ***
-        # Some apps (WhatsApp/Electron) need more time to react to the system layout change
-        time.sleep(0.6) # Increased delay to 0.6s for broader app compatibility
+            # Wait for OS to process the change
+            time.sleep(0.6)
 
-        # Type the corrected word followed by a space
-        print(f"Typing corrected word: '{corrected_word}'")
-        self.controller.type(corrected_word + ' ')
+            # Type the corrected word + trigger
+            full_corrected = corrected_word + trigger_char
+            print(f"Typing corrected word: '{full_corrected}'")
+            self.controller.type(full_corrected)
 
-        # Short delay after actions before listening again
-        time.sleep(0.05)
-        self.typing_programmatically = False
-        print(f"Correction complete. Target layout should be {target_layout}")
-        # Update internal layout state AFTER switch and typing
-        self.current_layout = target_layout
+            # Important: Update internal layout state AFTER switch and typing
+            self.current_layout = target_layout
+            
+        finally:
+            # Always ensure we stop ignoring keys
+            time.sleep(0.05)
+            self.typing_programmatically = False
+            print(f"Correction complete. Target layout is {target_layout}")
 
 
     def levenshtein_distance(self, s, t):
@@ -203,22 +208,21 @@ class LanguageLayoutManager:
     def is_english(self, word):
         """
         Check if a word is in English, allowing for small spelling mistakes.
-        Uses Levenshtein distance for similarity check.
         """
-        if not word: return False # Handle empty string case
-        word_lower = word.lower() # Check dictionary with lowercase
+        if not word or len(word) < 2: return False 
+        word_lower = word.lower() 
+
+        # Strict check for very short words
+        if len(word_lower) <= 3:
+            return self.enchant_dict_en.check(word_lower)
 
         if self.enchant_dict_en.check(word_lower):
             return True
+        
         suggestions = self.enchant_dict_en.suggest(word_lower)
         for sugg in suggestions:
-            # Allow distance up to 1 for short words, 2 for longer ones maybe?
-            # Using fixed < 2 for now as per original code.
-            # Consider using python-Levenshtein for speed if installed
             if self.levenshtein_distance(word_lower, sugg) < 2:
-                # print(f"'{word}' is close to suggestion '{sugg}'") # Debugging
                 return True
-        # print(f"'{word}' not found and no close suggestions.") # Debugging
         return False
 
     # --- THIS FUNCTION IS ROBUST (v3 Swift Binary) ---
@@ -258,7 +262,7 @@ class LanguageLayoutManager:
 
 def main():
     """Start the keyboard listener."""
-    print("Starting Automatic Language Conversion (v5 - App Compatibility) ...")
+    print("Starting Automatic Language Conversion (v7 - First Word Only) ...")
     print("Press ESC to exit.")
     manager = LanguageLayoutManager() # Handles dictionary loading checks in init
     with keyboard.Listener(on_press=manager.on_press) as listener:
