@@ -14,6 +14,12 @@ try:
 except ImportError:
     AXIsProcessTrusted = None
 
+# CRITICAL FIX: macOS app bundles do not inherit the terminal's UTF-8 environment by default.
+# This forces `pbpaste` and `pbcopy` subprocesses to strictly use UTF-8 instead of MacRoman,
+# preventing the `◊ô◊®◊ï...` mojibake issue without needing to change any actual program logic.
+os.environ["LANG"] = "en_US.UTF-8"
+os.environ["LC_ALL"] = "en_US.UTF-8"
+
 def get_resource_path(relative_path):
     """ Get absolute path to resource, works for dev and for PyInstaller """
     try:
@@ -258,22 +264,16 @@ class LanguageLayoutManager:
         m, n = len(s), len(t)
         if m == 0: return n
         if n == 0: return m
-        # Use python-Levenshtein if available (faster), otherwise fallback
-        try:
-            import Levenshtein
-            return Levenshtein.distance(s, t)
-        except ImportError:
-            # Fallback to manual implementation if Levenshtein not installed
-            dp = [[0] * (n + 1) for _ in range(m + 1)]
-            for i in range(m + 1): dp[i][0] = i
-            for j in range(n + 1): dp[0][j] = j
-            for i in range(1, m + 1):
-                for j in range(1, n + 1):
-                    cost = 0 if s[i - 1] == t[j - 1] else 1
-                    dp[i][j] = min(dp[i - 1][j] + 1,      # deletion
-                                 dp[i][j - 1] + 1,      # insertion
-                                 dp[i - 1][j - 1] + cost) # substitution
-            return dp[m][n]
+        dp = [[0] * (n + 1) for _ in range(m + 1)]
+        for i in range(m + 1): dp[i][0] = i
+        for j in range(n + 1): dp[0][j] = j
+        for i in range(1, m + 1):
+            for j in range(1, n + 1):
+                cost = 0 if s[i - 1] == t[j - 1] else 1
+                dp[i][j] = min(dp[i - 1][j] + 1,      # deletion
+                             dp[i][j - 1] + 1,      # insertion
+                             dp[i - 1][j - 1] + cost) # substitution
+        return dp[m][n]
 
     def is_english(self, word):
         """
